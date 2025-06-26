@@ -25,16 +25,50 @@ class Blockchain(object):
   
   # constructor method
   def __init__(self): #generate genesis block
+    # Initialize to add each node
+    self.nodes = set() 
+
     self.chain = [] #save all blocks in chainj
     
     self.current_transactions = [] #save all transactions in current block
     genesis_hash = self.hash_block("genesis_block") #hash genesis block
     nonce = self.proof_of_work(0, genesis_hash, []) # Get a valid nonce for the genesis block
-
+    
     self.add_block(
       hash_of_previous_block=genesis_hash,
       nonce = nonce, # proof of work
     )
+  
+  # Method to register a new node
+  def add_node(self, address):
+    parsed_url = urlparse(address)
+    self.nodes.add(parsed_url.netloc) # Add the node to the set of nodes
+    print(parsed_url.netloc, "added to nodes") # Print the node that was added
+
+  def valid_chain(self, chain):
+    last_block = chain[0]
+    current_index = 1
+
+    while current_index < len(chain):
+      block = chain[current_index]
+
+      # Check if the hash of the previous block is correct
+      if block['hash_of_previous_block'] != self.hash_block(last_block):
+        return False
+      
+      if not self.valid_proof(
+        current_index,
+        block['hash_of_previous_block'],
+        block['transactions'],
+        block['nonce']
+      ):
+        return False
+      
+      last_block = block # Update the last block
+      current_index += 1 # Move to the next block
+    
+    return True # If all checks passed, the chain is valid
+
 
   # method to get valid nonce
   def proof_of_work(self, index, hash_of_previous_block, transactions, nonce=0):
