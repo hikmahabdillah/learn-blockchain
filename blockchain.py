@@ -20,23 +20,23 @@ class Blockchain(object):
 
   #hashing block function 
   def hash_block(self, block):
-    block_encoded = json.dumps(block, sort_keys=True) # sorting keys for consistent hashing
-    return hashlib.sha256(block_encoded.encode()).hexdigest()
+    block_encoded = json.dumps(block, sort_keys=True).encode() # sorting keys for consistent hashing
+    return hashlib.sha256(block_encoded).hexdigest()
   
   # constructor method
   def __init__(self): #generate genesis block
     # Initialize to add each node
-    self.nodes = set() 
+    self.nodes = set() #
 
-    self.chain = [] #save all blocks in chainj
+    self.chain = [] #save all blocks in chain
     
     self.current_transactions = [] #save all transactions in current block
+
     genesis_hash = self.hash_block("genesis_block") #hash genesis block
-    nonce = self.proof_of_work(0, genesis_hash, []) # Get a valid nonce for the genesis block
     
     self.add_block(
       hash_of_previous_block=genesis_hash,
-      nonce = nonce, # proof of work
+      nonce = self.proof_of_work(0, genesis_hash, []) # Get a valid nonce for the genesis block, # proof of work
     )
   
   # Method to register a new node
@@ -53,25 +53,56 @@ class Blockchain(object):
       block = chain[current_index]
 
       # Check if the hash of the previous block is correct
+      #previous_hash from current block != hash of last block
+      #previous_hash from block 1 != hash of block 0
       if block['hash_of_previous_block'] != self.hash_block(last_block):
         return False
       
       if not self.valid_proof(
         current_index,
         block['hash_of_previous_block'],
-        block['transactions'],
-        block['nonce']
-      ):
+        block['transaction'],
+        block['nonce']):
         return False
       
       last_block = block # Update the last block
       current_index += 1 # Move to the next block
     
     return True # If all checks passed, the chain is valid
+  
+  # update the chain with a new chain, synchronize with other nodes
+  def update_chain(self):
+    #search neighboring nodes for a longer chain
+    neighbours = self.nodes # Get the set of nodes
+    new_chain = None # Initialize new_chain to None
 
+    # Loop through each node to find the longest chain
+    max_length = len(self.chain) # Get the length of the current chain
+
+    for node in neighbours:
+      response = requests.get(f'http://{node}/blockchain')
+
+      if response.status_code == 200: # If the request was successful
+        length = response.json()['length']
+        chain = response.json()['chain']
+
+        # Check if the length of the chain is greater than the current max_length and if the chain is valid
+        if length > max_length and self.valid_chain(chain):
+          max_length = length # Update max_length if the new chain is longer
+          new_chain = chain # Update new_chain if a longer valid chain is found
+        
+          if new_chain: # If a new chain was found
+            self.chain = new_chain # Update the current chain to the new chain
+            return True # Return True indicating the chain was updated
+            
+    return False # Return False if no valid longer chain was found
+  
 
   # method to get valid nonce
-  def proof_of_work(self, index, hash_of_previous_block, transactions, nonce=0):
+  def proof_of_work(self, index, hash_of_previous_block, transactions):
+    nonce = 0 # Start with nonce 0
+    
+    # Loop until a valid nonce is found
     while self.valid_proof(index, hash_of_previous_block, transactions, nonce) is False:
       nonce += 1
     return nonce
@@ -88,11 +119,11 @@ class Blockchain(object):
     return content_hash[:len(self.difficulty_target)] == self.difficulty_target
 
   # Function to add a new block to the chain
-  def add_block(self, hash_of_previous_block, nonce):
+  def add_block(self, nonce,hash_of_previous_block):
     block = {
-      'index': len(self.chain) + 1, # index of the block
+      'index': len(self.chain), # index of the block
       'timestamp': time(), # timestamp of the block
-      'transactions': self.current_transactions, # transactions in the block
+      'transaction': self.current_transactions, # transactions in the block
       'nonce': nonce, # nonce for proof of work
       'hash_of_previous_block': hash_of_previous_block # hash of the previous block
     }
@@ -107,8 +138,8 @@ class Blockchain(object):
   def add_transaction(self, sender, recipient, amount):
     self.current_transactions.append({
       'amount': amount,
-      'sender': sender,
-      'recipient': recipient
+      'recipient': recipient,
+      'sender': sender
     })
 
     # The index of the block that will hold this transaction is the last block's index + 1
@@ -116,7 +147,7 @@ class Blockchain(object):
   
   @property
   def last_block(self):
-    return self.chain[-1] if self.chain else None
+    return self.chain[-1] 
 
 app = Flask(__name__)
 
@@ -142,19 +173,18 @@ def mine_block():
     amount=1, # mining reward is 1 unit
   )
 
-  last_block = blockchain.last_block # Get the last block
-  hash_of_previous_block = blockchain.hash_block(last_block) # Hash the last block
+  last_block_hash = blockchain.hash_block(blockchain.last_block) # Hash the last block
 
   index = len(blockchain.chain) # Index of the new block
-  nonce = blockchain.proof_of_work(index, hash_of_previous_block, blockchain.current_transactions)
+  nonce = blockchain.proof_of_work(index, last_block_hash, blockchain.current_transactions)
 
-  block = blockchain.add_block(hash_of_previous_block=hash_of_previous_block, nonce=nonce) # Add the new block to the chain
+  block = blockchain.add_block(nonce, last_block_hash) # Add the new block to the chain
   response = {
     'message': 'New Block Forged',
     'index': block['index'],
     'hash_of_previous_block': block['hash_of_previous_block'],
     'nonce': block['nonce'],
-    'transactions': block['transactions'],
+    'transaction': block['transaction'],
   }
 
   return jsonify(response), 200
@@ -180,6 +210,43 @@ def new_transaction():
   }
 
   return jsonify(response), 201
+
+#route for registering a new node
+@app.route('/nodes/add_nodes', methods=['POST'])
+def add_nodes():
+  values = request.get_json() # Get the JSON data from the request
+  nodes = values.get('nodes') # Get the list of nodes from the JSON data
+
+  if nodes is None:
+    return 'Error: Please supply a valid list of nodes', 400
+  
+  for node in nodes:
+    blockchain.add_node(node)
+
+  response = {
+    'message': 'New nodes have been added',
+    'nodes': list(blockchain.nodes) # Return the list of nodes
+  }
+
+  return jsonify(response), 201
+
+# update chain
+@app.route('/nodes/sync', methods=['GET'])
+def sync_chain():
+  updated = blockchain.update_chain()
+  if updated:
+    response = {
+      'message': 'Chain updated successfully with a new data',
+      'blockchain': blockchain.chain
+    }
+  else:
+    response = {
+      'message': 'No new data found, chain is up to date',
+      'blockchain': blockchain.chain
+    } 
+
+  # Return the response as JSON
+  return jsonify(response), 200
 
 if __name__ == '__main__':
   # Run the Flask app
